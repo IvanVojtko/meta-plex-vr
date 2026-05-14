@@ -143,30 +143,3 @@ Good areas to improve:
 
 If you open a PR, keep changes focused and include build/test notes.
 
-## GitHub Release CI
-
-This repository includes a GitHub Actions workflow at `.github/workflows/release-apk.yml`.
-
-When a GitHub release is published, the workflow will:
-- rebuild the Android signing keystore from GitHub Secrets
-- generate `keystore.properties`
-- run `./gradlew assembleRelease`
-- attach the signed APK to the GitHub release
-
-Required repository secrets:
-- `RELEASE_KEYSTORE_BASE64`
-- `RELEASE_STORE_PASSWORD`
-- `RELEASE_KEY_ALIAS`
-- `RELEASE_KEY_PASSWORD`
-
-To create the Base64 secret from your keystore:
-
-```bash
-base64 -w 0 MetaPlexPlay-release.jks
-```
-
-On macOS, use:
-
-```bash
-base64 MetaPlexPlay-release.jks | tr -d '\n'
-```
