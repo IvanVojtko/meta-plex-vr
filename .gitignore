@@ -1,0 +1,31 @@
+# Gradle
+.gradle/
+.kotlin/
+
+# Local Android SDK config
+local.properties
+
+# Android Studio / IntelliJ
+*.iml
+.idea/caches/
+.idea/libraries/
+.idea/modules.xml
+.idea/workspace.xml
+.idea/navEditor.xml
+.idea/assetWizardSettings.xml
+
+# Build outputs
+build/
+app/build/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Signing
+keystore.properties
+*.jks
+*.keystore
+*.p12
+
+# OS files
+.DS_Store

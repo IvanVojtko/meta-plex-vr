@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">MetaPlexPlay</string>
+    <string name="plex_login_title">Connect to Plex</string>
+    <string name="plex_login_description">Sign in with your Plex account to discover servers and play your movie library on Meta Quest.</string>
+    <string name="plex_login_button">Sign in with Plex</string>
+    <string name="plex_logout_button">Sign out</string>
+    <string name="plex_connected_title">Plex connected</string>
+    <string name="plex_connected_description">Authentication is working. Next we can load the available Plex servers and movie libraries.</string>
+    <string name="plex_pin_label">Code: %1$s</string>
+    <string name="switch_to_home_space_mode">Switch to Home Space Mode</string>
+    <string name="switch_to_full_space_mode">Switch to Full Space Mode</string>
+</resources>
