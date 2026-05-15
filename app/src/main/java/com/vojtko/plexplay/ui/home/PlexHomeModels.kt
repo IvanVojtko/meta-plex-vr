@@ -4,12 +4,19 @@ import androidx.compose.ui.graphics.Color
 import com.vojtko.plexplay.player.PlexPlaybackMedia
 
 data class PlexHomeContent(
+    val selectedServerId: String,
     val serverName: String,
+    val availableServers: List<PlexServerOption>,
     val categories: List<String>,
     val libraries: List<PlexLibraryItem>,
     val continueWatching: List<PlexMediaItem>,
     val recentMovies: List<PlexMediaItem>,
     val recentShows: List<PlexMediaItem>
+)
+
+data class PlexServerOption(
+    val id: String,
+    val name: String
 )
 
 data class PlexLibraryItem(
