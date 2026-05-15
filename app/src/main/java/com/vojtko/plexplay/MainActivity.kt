@@ -190,11 +190,16 @@ fun MainContent(
     val uiState = loginViewModel.uiState.collectAsStateWithLifecycle().value
     var selectedMedia by remember { mutableStateOf<PlexPlaybackMedia?>(null) }
     var immersivePlayback by remember { mutableStateOf(false) }
+    var browseMixedReality by remember { mutableStateOf(true) }
     var playbackScreenSize by remember { mutableStateOf(PlaybackScreenSize.Medium) }
     var curvedPlayback by remember { mutableStateOf(false) }
 
-    LaunchedEffect(uiState.isLoggedIn, selectedMedia, immersivePlayback) {
-        val shouldUseMixedReality = !uiState.isLoggedIn || selectedMedia == null || !immersivePlayback
+    LaunchedEffect(uiState.isLoggedIn, selectedMedia, immersivePlayback, browseMixedReality) {
+        val shouldUseMixedReality = when {
+            !uiState.isLoggedIn -> true
+            selectedMedia != null -> !immersivePlayback
+            else -> browseMixedReality
+        }
         activity.setMixedRealityEnabled(shouldUseMixedReality)
     }
 
@@ -241,7 +246,10 @@ fun MainContent(
             PlexHomeScreen(
                 viewModel = homeViewModel,
                 modifier = modifier,
+                isMixedRealityMode = browseMixedReality,
+                onMixedRealityModeChange = { browseMixedReality = it },
                 onSignOutClick = {
+                    browseMixedReality = true
                     immersivePlayback = false
                     playbackScreenSize = PlaybackScreenSize.Medium
                     curvedPlayback = false
@@ -249,12 +257,14 @@ fun MainContent(
                     loginViewModel.signOut()
                 },
                 onPlayMedia = {
+                    browseMixedReality = true
                     immersivePlayback = false
                     playbackScreenSize = PlaybackScreenSize.Medium
                     curvedPlayback = false
                     selectedMedia = it
                 },
                 onSessionExpired = {
+                    browseMixedReality = true
                     immersivePlayback = false
                     playbackScreenSize = PlaybackScreenSize.Medium
                     curvedPlayback = false
@@ -269,6 +279,7 @@ fun MainContent(
             uiState = uiState,
             onSignInClick = {
                 loginViewModel.beginLogin { authUrl ->
+                    browseMixedReality = true
                     immersivePlayback = false
                     playbackScreenSize = PlaybackScreenSize.Medium
                     curvedPlayback = false

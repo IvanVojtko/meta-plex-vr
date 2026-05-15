@@ -23,13 +23,27 @@ class PlexAuthStore(context: Context) {
         preferences.edit().putString(KEY_AUTH_TOKEN, token).apply()
     }
 
+    fun getSelectedServerId(): String? = preferences.getString(KEY_SELECTED_SERVER_ID, null)
+
+    fun saveSelectedServerId(serverId: String) {
+        preferences.edit().putString(KEY_SELECTED_SERVER_ID, serverId).apply()
+    }
+
+    fun clearSelectedServerId() {
+        preferences.edit().remove(KEY_SELECTED_SERVER_ID).apply()
+    }
+
     fun clearAuthToken() {
-        preferences.edit().remove(KEY_AUTH_TOKEN).apply()
+        preferences.edit()
+            .remove(KEY_AUTH_TOKEN)
+            .remove(KEY_SELECTED_SERVER_ID)
+            .apply()
     }
 
     companion object {
         private const val PREFERENCES_NAME = "plex_auth"
         private const val KEY_CLIENT_ID = "client_id"
         private const val KEY_AUTH_TOKEN = "auth_token"
+        private const val KEY_SELECTED_SERVER_ID = "selected_server_id"
     }
 }

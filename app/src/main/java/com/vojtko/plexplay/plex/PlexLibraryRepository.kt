@@ -9,6 +9,7 @@ import com.vojtko.plexplay.ui.home.PlexBrowseCrumb
 import com.vojtko.plexplay.ui.home.PlexHomeContent
 import com.vojtko.plexplay.ui.home.PlexLibraryItem
 import com.vojtko.plexplay.ui.home.PlexMediaItem
+import com.vojtko.plexplay.ui.home.PlexServerOption
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
@@ -22,15 +23,13 @@ class PlexLibraryRepository(
 ) {
     private val authStore = PlexAuthStore(context)
 
-    fun loadHomeContent(): PlexHomeContent {
-        val accountToken = authStore.getAuthToken()
-            ?: throw IllegalStateException("Missing Plex auth token.")
-        val clientId = authStore.getOrCreateClientIdentifier()
-        val server = discoverServers(accountToken, clientId).firstOrNull()
-            ?: throw IllegalStateException("No Plex Media Server was found for this account.")
+    fun loadHomeContent(serverId: String? = null, persistSelection: Boolean = true): PlexHomeContent {
+        val session = createSession(serverId = serverId, persistSelection = persistSelection)
+        val server = session.server
+        val clientId = session.clientId
         val sections = fetchSections(server, clientId)
-        val movieSection = sections.firstOrNull { it.type == "movie" }
-        val showSection = sections.firstOrNull { it.type == "show" }
+        val movieSections = sections.filter { it.type == "movie" }
+        val showSections = sections.filter { it.type == "show" }
 
         val categories = buildList {
             add("Home")
@@ -38,16 +37,26 @@ class PlexLibraryRepository(
         }
 
         return PlexHomeContent(
+            selectedServerId = server.id,
             serverName = server.name,
+            availableServers = session.availableServers.map {
+                PlexServerOption(id = it.id, name = it.name)
+            },
             categories = categories,
             libraries = sections.map { PlexLibraryItem(title = it.title, type = it.type) },
             continueWatching = fetchContinueWatching(server, clientId, count = 10),
-            recentMovies = movieSection?.let {
-                fetchRecentlyAddedMovies(server, clientId, it.id, count = 10)
-            }.orEmpty(),
-            recentShows = showSection?.let {
-                fetchRecentlyAddedShows(server, clientId, it.id, count = 10)
-            }.orEmpty()
+            recentMovies = fetchRecentlyAddedAcrossSections(
+                server = server,
+                clientId = clientId,
+                sections = movieSections,
+                count = 10
+            ),
+            recentShows = fetchRecentlyAddedAcrossSections(
+                server = server,
+                clientId = clientId,
+                sections = showSections,
+                count = 10
+            )
         )
     }
 
@@ -78,13 +87,26 @@ class PlexLibraryRepository(
         return parseMetadataItems(json, server, limit = count)
     }
 
-    private fun createSession(): PlexSession {
+    fun saveSelectedServer(serverId: String) {
+        authStore.saveSelectedServerId(serverId)
+    }
+
+    private fun createSession(
+        serverId: String? = null,
+        persistSelection: Boolean = true
+    ): PlexSession {
         val accountToken = authStore.getAuthToken()
             ?: throw IllegalStateException("Missing Plex auth token.")
         val clientId = authStore.getOrCreateClientIdentifier()
-        val server = discoverServers(accountToken, clientId).firstOrNull()
+        val servers = discoverServers(accountToken, clientId)
+        val selectedServerId = serverId ?: authStore.getSelectedServerId()
+        val server = servers.firstOrNull { it.id == selectedServerId }
+            ?: servers.firstOrNull()
             ?: throw IllegalStateException("No Plex Media Server was found for this account.")
-        return PlexSession(server = server, clientId = clientId)
+        if (persistSelection && selectedServerId != server.id) {
+            authStore.saveSelectedServerId(server.id)
+        }
+        return PlexSession(server = server, clientId = clientId, availableServers = servers)
     }
 
     private fun discoverServers(accountToken: String, clientId: String): List<PlexServer> {
@@ -159,32 +181,33 @@ class PlexLibraryRepository(
         return items.distinctBy { it.id }.take(count)
     }
 
-    private fun fetchRecentlyAddedMovies(
+    private fun fetchRecentlyAddedAcrossSections(
         server: PlexServer,
         clientId: String,
-        sectionId: String,
+        sections: List<PlexLibrarySection>,
         count: Int
     ): List<PlexMediaItem> {
-        val json = getJson(
-            url = "${server.baseUrl}/library/sections/$sectionId/recentlyAdded?X-Plex-Container-Start=0&X-Plex-Container-Size=$count",
-            token = server.accessToken,
-            clientId = clientId
-        )
-        return parseMetadataItems(json, server, limit = count)
-    }
+        if (sections.isEmpty()) return emptyList()
 
-    private fun fetchRecentlyAddedShows(
-        server: PlexServer,
-        clientId: String,
-        sectionId: String,
-        count: Int
-    ): List<PlexMediaItem> {
-        val json = getJson(
-            url = "${server.baseUrl}/library/sections/$sectionId/recentlyAdded?X-Plex-Container-Start=0&X-Plex-Container-Size=$count",
-            token = server.accessToken,
-            clientId = clientId
-        )
-        return parseMetadataItems(json, server, limit = count)
+        val metadataItems = sections.flatMap { section ->
+            val json = getJson(
+                url = "${server.baseUrl}/library/sections/${section.id}/recentlyAdded?X-Plex-Container-Start=0&X-Plex-Container-Size=$count",
+                token = server.accessToken,
+                clientId = clientId
+            )
+            val metadata = json.getJSONObject("MediaContainer").optJSONArray("Metadata").orEmpty()
+            buildList {
+                for (index in 0 until metadata.length()) {
+                    add(metadata.getJSONObject(index))
+                }
+            }
+        }
+
+        return metadataItems
+            .sortedByDescending { it.optLong("addedAt", 0L) }
+            .distinctBy { it.optString("ratingKey").ifBlank { it.optString("key") } }
+            .take(count)
+            .map { it.toMediaItem(server) }
     }
 
     private fun parseMetadataItems(
@@ -233,6 +256,9 @@ class PlexLibraryRepository(
                 val provides = parser.getAttributeValue(null, "provides").orEmpty()
                 if (provides.contains("server")) {
                     val name = parser.getAttributeValue(null, "name").orEmpty()
+                    val id = parser.getAttributeValue(null, "clientIdentifier")
+                        .orEmpty()
+                        .ifBlank { name }
                     val accessToken = parser.getAttributeValue(null, "accessToken").orEmpty()
                     val owned = parser.getAttributeValue(null, "owned") == "1"
                     val connections = mutableListOf<PlexConnection>()
@@ -258,6 +284,7 @@ class PlexLibraryRepository(
 
                     if (name.isNotBlank() && accessToken.isNotBlank() && bestConnection != null) {
                         servers += PlexServer(
+                            id = id,
                             name = name,
                             baseUrl = bestConnection.uri,
                             accessToken = accessToken,
@@ -446,6 +473,7 @@ class PlexLibraryRepository(
 }
 
 private data class PlexServer(
+    val id: String,
     val name: String,
     val baseUrl: String,
     val accessToken: String,
@@ -460,7 +488,8 @@ private data class PlexConnection(
 
 private data class PlexSession(
     val server: PlexServer,
-    val clientId: String
+    val clientId: String,
+    val availableServers: List<PlexServer>
 )
 
 private data class PlexLibrarySection(

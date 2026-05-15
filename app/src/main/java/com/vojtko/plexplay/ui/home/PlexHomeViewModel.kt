@@ -26,7 +26,11 @@ class PlexHomeViewModel(application: Application) : AndroidViewModel(application
 
     fun refresh() {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
+            _uiState.value = _uiState.value.copy(
+                isLoading = true,
+                errorMessage = null,
+                rollbackServer = null
+            )
             runCatching {
                 withContext(Dispatchers.IO) { repository.loadHomeContent() }
             }.onSuccess { content ->
@@ -44,13 +48,97 @@ class PlexHomeViewModel(application: Application) : AndroidViewModel(application
                         errorMessage = error.message ?: "Your Plex session expired."
                     )
                 } else {
+                    val hadSavedServer = authStore.getSelectedServerId() != null
+                    if (hadSavedServer) {
+                        authStore.clearSelectedServerId()
+                        runCatching {
+                            withContext(Dispatchers.IO) { repository.loadHomeContent() }
+                        }.onSuccess { content ->
+                            _uiState.value = PlexHomeUiState(
+                                isLoading = false,
+                                content = content,
+                                selectedCategory = content.categories.firstOrNull().orEmpty(),
+                                errorMessage = "Saved Plex server was unavailable. Switched to ${content.serverName}."
+                            )
+                        }.onFailure { fallbackError ->
+                            _uiState.value = PlexHomeUiState(
+                                isLoading = false,
+                                errorMessage = fallbackError.message ?: "Could not load Plex libraries."
+                            )
+                        }
+                    } else {
+                        _uiState.value = PlexHomeUiState(
+                            isLoading = false,
+                            errorMessage = error.message ?: "Could not load Plex libraries."
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun selectServer(serverId: String) {
+        val previousState = _uiState.value
+        val previousContent = previousState.content ?: return
+        if (previousContent.selectedServerId == serverId) {
+            return
+        }
+        val previousServer = previousContent.availableServers.firstOrNull {
+            it.id == previousContent.selectedServerId
+        }?.let {
+            ServerRollbackState(serverId = it.id, serverName = it.name)
+        } ?: ServerRollbackState(
+            serverId = previousContent.selectedServerId,
+            serverName = previousContent.serverName
+        )
+        _uiState.value = previousState.copy(
+            isLoading = true,
+            errorMessage = null,
+            rollbackServer = null,
+            selectedCategory = "Home",
+            selectedCategoryItems = emptyList(),
+            browseBreadcrumbs = emptyList()
+        )
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    repository.loadHomeContent(serverId = serverId, persistSelection = false)
+                }
+            }.onSuccess { content ->
+                repository.saveSelectedServer(content.selectedServerId)
+                _uiState.value = PlexHomeUiState(
+                    isLoading = false,
+                    content = content,
+                    selectedCategory = content.categories.firstOrNull().orEmpty()
+                )
+            }.onFailure { error ->
+                if (error is PlexAuthenticationException) {
+                    authStore.clearAuthToken()
                     _uiState.value = PlexHomeUiState(
                         isLoading = false,
-                        errorMessage = error.message ?: "Could not load Plex libraries."
+                        requiresLogin = true,
+                        errorMessage = error.message ?: "Your Plex session expired."
+                    )
+                } else {
+                    _uiState.value = previousState.copy(
+                        isLoading = false,
+                        errorMessage = error.message ?: "Could not connect to the selected Plex server.",
+                        rollbackServer = previousServer
                     )
                 }
             }
         }
+    }
+
+    fun returnToPreviousServer() {
+        val rollbackServer = _uiState.value.rollbackServer ?: return
+        repository.saveSelectedServer(rollbackServer.serverId)
+        _uiState.value = _uiState.value.copy(errorMessage = null, rollbackServer = null)
+        refresh()
+    }
+
+    fun dismissError() {
+        _uiState.value = _uiState.value.copy(errorMessage = null, rollbackServer = null)
     }
 
     fun selectCategory(category: String) {
@@ -197,5 +285,11 @@ data class PlexHomeUiState(
     val browseBreadcrumbs: List<PlexBrowseCrumb> = emptyList(),
     val isCategoryLoading: Boolean = false,
     val errorMessage: String? = null,
+    val rollbackServer: ServerRollbackState? = null,
     val requiresLogin: Boolean = false
+)
+
+data class ServerRollbackState(
+    val serverId: String,
+    val serverName: String
 )

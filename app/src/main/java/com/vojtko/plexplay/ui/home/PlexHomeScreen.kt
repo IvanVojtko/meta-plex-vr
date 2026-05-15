@@ -27,11 +27,17 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -51,6 +57,8 @@ fun PlexHomeScreen(
     onSignOutClick: () -> Unit,
     onPlayMedia: (PlexPlaybackMedia) -> Unit,
     onSessionExpired: () -> Unit,
+    isMixedRealityMode: Boolean,
+    onMixedRealityModeChange: (Boolean) -> Unit,
     viewModel: PlexHomeViewModel
 ) {
     val uiState = viewModel.uiState.collectAsStateWithLifecycle().value
@@ -67,13 +75,7 @@ fun PlexHomeScreen(
     }
 
     when {
-        uiState.isLoading -> PlexHomeLoading(modifier = modifier)
-        uiState.errorMessage != null -> PlexHomeError(
-            modifier = modifier,
-            message = uiState.errorMessage,
-            onRetry = viewModel::refresh,
-            onSignOutClick = onSignOutClick
-        )
+        uiState.isLoading && uiState.content == null -> PlexHomeLoading(modifier = modifier)
         uiState.content != null -> PlexHomeContentScreen(
             modifier = modifier,
             content = uiState.content,
@@ -81,12 +83,27 @@ fun PlexHomeScreen(
             selectedCategoryItems = uiState.selectedCategoryItems,
             browseBreadcrumbs = uiState.browseBreadcrumbs,
             isCategoryLoading = uiState.isCategoryLoading,
+            inlineErrorMessage = uiState.errorMessage,
+            rollbackServer = uiState.rollbackServer,
+            onDismissError = viewModel::dismissError,
+            onReturnToPreviousServer = viewModel::returnToPreviousServer,
             onCategorySelected = viewModel::selectCategory,
             onBrowseBack = viewModel::browseBack,
             onOpenLibraryItem = viewModel::openLibraryItem,
             onSignOutClick = onSignOutClick,
             onRefreshClick = viewModel::refresh,
+            onServerSelected = viewModel::selectServer,
+            isMixedRealityMode = isMixedRealityMode,
+            onMixedRealityModeChange = onMixedRealityModeChange,
             onPlayMedia = onPlayMedia
+        )
+        uiState.errorMessage != null -> PlexHomeError(
+            modifier = modifier,
+            message = uiState.errorMessage,
+            onRetry = viewModel::refresh,
+            onSignOutClick = onSignOutClick,
+            rollbackServer = uiState.rollbackServer,
+            onReturnToPreviousServer = viewModel::returnToPreviousServer
         )
     }
 }
@@ -110,7 +127,9 @@ private fun PlexHomeError(
     modifier: Modifier = Modifier,
     message: String,
     onRetry: () -> Unit,
-    onSignOutClick: () -> Unit
+    onSignOutClick: () -> Unit,
+    rollbackServer: ServerRollbackState?,
+    onReturnToPreviousServer: () -> Unit
 ) {
     Box(
         modifier = modifier.fillMaxSize(),
@@ -134,6 +153,11 @@ private fun PlexHomeError(
                 )
                 Spacer(modifier = Modifier.height(20.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    rollbackServer?.let {
+                        Button(onClick = onReturnToPreviousServer) {
+                            Text("Return to ${it.serverName}")
+                        }
+                    }
                     Button(onClick = onRetry) {
                         Text("Retry")
                     }
@@ -154,11 +178,18 @@ private fun PlexHomeContentScreen(
     selectedCategoryItems: List<PlexMediaItem>,
     browseBreadcrumbs: List<PlexBrowseCrumb>,
     isCategoryLoading: Boolean,
+    inlineErrorMessage: String?,
+    rollbackServer: ServerRollbackState?,
+    onDismissError: () -> Unit,
+    onReturnToPreviousServer: () -> Unit,
     onCategorySelected: (String) -> Unit,
     onBrowseBack: () -> Unit,
     onOpenLibraryItem: (PlexMediaItem) -> Unit,
     onSignOutClick: () -> Unit,
     onRefreshClick: () -> Unit,
+    onServerSelected: (String) -> Unit,
+    isMixedRealityMode: Boolean,
+    onMixedRealityModeChange: (Boolean) -> Unit,
     onPlayMedia: (PlexPlaybackMedia) -> Unit
 ) {
     val featuredItem = content.continueWatching.firstOrNull()
@@ -205,10 +236,24 @@ private fun PlexHomeContentScreen(
                     .verticalScroll(rememberScrollState())
                     .padding(20.dp)
             ) {
+                inlineErrorMessage?.let {
+                    PlexInlineError(
+                        message = it,
+                        rollbackServer = rollbackServer,
+                        onDismiss = onDismissError,
+                        onReturnToPreviousServer = onReturnToPreviousServer
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
                 CompactHeader(
                     serverName = content.serverName,
+                    selectedServerId = content.selectedServerId,
+                    availableServers = content.availableServers,
+                    onServerSelected = onServerSelected,
                     onRefreshClick = onRefreshClick,
-                    onSignOutClick = onSignOutClick
+                    onSignOutClick = onSignOutClick,
+                    isMixedRealityMode = isMixedRealityMode,
+                    onMixedRealityModeChange = onMixedRealityModeChange
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 CategoryStrip(
@@ -237,11 +282,16 @@ private fun PlexHomeContentScreen(
                 PlexSidebar(
                     modifier = Modifier.align(Alignment.CenterStart),
                     serverName = content.serverName,
+                    selectedServerId = content.selectedServerId,
+                    availableServers = content.availableServers,
                     categories = content.categories,
                     selectedCategory = selectedCategory,
                     onCategorySelected = onCategorySelected,
                     onSignOutClick = onSignOutClick,
-                    onRefreshClick = onRefreshClick
+                    onRefreshClick = onRefreshClick,
+                    onServerSelected = onServerSelected,
+                    isMixedRealityMode = isMixedRealityMode,
+                    onMixedRealityModeChange = onMixedRealityModeChange
                 )
                 Column(
                     modifier = Modifier
@@ -252,6 +302,15 @@ private fun PlexHomeContentScreen(
                         .verticalScroll(rememberScrollState())
                         .padding(24.dp)
                 ) {
+                    inlineErrorMessage?.let {
+                        PlexInlineError(
+                            message = it,
+                            rollbackServer = rollbackServer,
+                            onDismiss = onDismissError,
+                            onReturnToPreviousServer = onReturnToPreviousServer
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                    }
                     HomeContentBody(
                         featuredItem = featuredItem,
                         sectionTitle = sectionTitle,
@@ -266,6 +325,46 @@ private fun PlexHomeContentScreen(
                         recentShows = recentShows,
                         onPlayMedia = onPlayMedia
                     )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlexInlineError(
+    message: String,
+    rollbackServer: ServerRollbackState?,
+    onDismiss: () -> Unit,
+    onReturnToPreviousServer: () -> Unit
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.92f)
+        ),
+        shape = RoundedCornerShape(24.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Could not switch Plex server",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onErrorContainer
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = message,
+                color = MaterialTheme.colorScheme.onErrorContainer
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                rollbackServer?.let {
+                    Button(onClick = onReturnToPreviousServer) {
+                        Text("Return to ${it.serverName}")
+                    }
+                }
+                Button(onClick = onDismiss) {
+                    Text("Dismiss")
                 }
             }
         }
@@ -412,8 +511,13 @@ private fun LibraryCategoryContent(
 @Composable
 private fun CompactHeader(
     serverName: String,
+    selectedServerId: String,
+    availableServers: List<PlexServerOption>,
+    onServerSelected: (String) -> Unit,
     onRefreshClick: () -> Unit,
-    onSignOutClick: () -> Unit
+    onSignOutClick: () -> Unit,
+    isMixedRealityMode: Boolean,
+    onMixedRealityModeChange: (Boolean) -> Unit
 ) {
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
@@ -427,15 +531,18 @@ private fun CompactHeader(
                 color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = serverName,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
+            ServerSelectorButton(
+                serverName = serverName,
+                selectedServerId = selectedServerId,
+                availableServers = availableServers,
+                onServerSelected = onServerSelected,
+                textColor = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(modifier = Modifier.height(14.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(onClick = { onMixedRealityModeChange(!isMixedRealityMode) }) {
+                    Text(if (isMixedRealityMode) "Black background" else "Mixed reality")
+                }
                 Button(onClick = onRefreshClick) {
                     Text("Refresh")
                 }
@@ -480,11 +587,16 @@ private fun CategoryStrip(
 private fun PlexSidebar(
     modifier: Modifier = Modifier,
     serverName: String,
+    selectedServerId: String,
+    availableServers: List<PlexServerOption>,
     categories: List<String>,
     selectedCategory: String,
     onCategorySelected: (String) -> Unit,
     onSignOutClick: () -> Unit,
-    onRefreshClick: () -> Unit
+    onRefreshClick: () -> Unit,
+    onServerSelected: (String) -> Unit,
+    isMixedRealityMode: Boolean,
+    onMixedRealityModeChange: (Boolean) -> Unit
 ) {
     Column(
         modifier = modifier
@@ -523,12 +635,12 @@ private fun PlexSidebar(
             fontWeight = FontWeight.Bold,
             color = Color.White
         )
-        Text(
-            text = serverName,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
+        ServerSelectorButton(
+            serverName = serverName,
+            selectedServerId = selectedServerId,
+            availableServers = availableServers,
+            onServerSelected = onServerSelected,
+            textColor = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(modifier = Modifier.height(28.dp))
         categories.forEach { category ->
@@ -578,6 +690,13 @@ private fun PlexSidebar(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(14.dp))
+                Button(
+                    onClick = { onMixedRealityModeChange(!isMixedRealityMode) },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (isMixedRealityMode) "Black background" else "Mixed reality")
+                }
+                Spacer(modifier = Modifier.height(10.dp))
                 Button(onClick = onRefreshClick, modifier = Modifier.fillMaxWidth()) {
                     Text("Refresh")
                 }
@@ -585,6 +704,53 @@ private fun PlexSidebar(
                 Button(onClick = onSignOutClick, modifier = Modifier.fillMaxWidth()) {
                     Text("Sign out")
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ServerSelectorButton(
+    serverName: String,
+    selectedServerId: String,
+    availableServers: List<PlexServerOption>,
+    onServerSelected: (String) -> Unit,
+    textColor: Color
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Box {
+        Text(
+            text = if (availableServers.size > 1) "$serverName ▼" else serverName,
+            modifier = Modifier
+                .clip(RoundedCornerShape(14.dp))
+                .clickable(enabled = availableServers.size > 1) { expanded = true }
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            style = MaterialTheme.typography.bodyMedium,
+            color = textColor,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            availableServers.forEach { server ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = if (server.id == selectedServerId) "${server.name} • Current" else server.name,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
+                    onClick = {
+                        expanded = false
+                        if (server.id != selectedServerId) {
+                            onServerSelected(server.id)
+                        }
+                    }
+                )
             }
         }
     }
